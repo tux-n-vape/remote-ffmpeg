@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import json
+import time
+import paramiko
+from paramiko import AutoAddPolicy
+
+
+def make_bash_friendly(args):
+    for x in range(0, len(args) - 1):
+        args[x] = "'" + args[x] + "'"
+
+
+def main():
+    # Prepare command
+    args = sys.argv.copy()
+    args[0] = 'ffmpeg'
+
+    upload = '-i' in args
+
+    # Load Config
+    with open('remote-ffmpeg.json') as json_data:
+        config = json.load(json_data)
+
+    # Connect to SSH
+    ssh = paramiko.SSHClient()
+    ssh.set_missing_host_key_policy(AutoAddPolicy())
+    ssh.load_system_host_keys()
+    ssh.connect(config['sshHost'], port=config['sshPort'], username=config['sshUser'])
+    ssh_transp = ssh.get_transport()
+
+    # Open SSH session
+    chan = ssh_transp.open_session()
+    chan.setblocking(0)
+
+    if upload:
+        # Getting local input and output paths
+        peertube_output = args[-1]
+        index_input = args.index('-i') + 1
+        peertube_input = args[index_input]
+
+        # Getting filenames
+        filename_output = peertube_output.split('/')[-1]
+        filename_input = peertube_input.split('/')[-1]
+
+        remote_input = os.path.join(config['sshPath'], filename_input)
+        remote_output = os.path.join(config['sshPath'], filename_output)
+
+        # Prepare remote filepath
+        args[index_input] = remote_input
+        args[-1] = remote_output
+
+        # Start SFTP Session
+        sftp = paramiko.SFTPClient.from_transport(ssh_transp)
+        sftp.put(peertube_input, remote_input)
+
+    make_bash_friendly(args)
+
+    chan.exec_command(' '.join(str(x) for x in args))
+
+    # Get Standard Output from SSH and wait end of command
+    data, errdata = b'', b''
+    sleeptime = 0.001
+    while not chan.exit_status_ready():  # monitoring process
+        # Reading from output streams
+        while chan.recv_ready():
+            data += chan.recv(1000)
+        while chan.recv_stderr_ready():
+            errdata += chan.recv_stderr(1000)
+        time.sleep(sleeptime)
+
+    # Get Return Code From SSH
+    retcode = chan.recv_exit_status()
+
+    if upload:
+        # If no error during SSH Session
+        if retcode == 0:
+            sftp.get(remote_output, peertube_output)
+
+        # Remove Remote Files
+        sftp.remove(remote_input)
+        sftp.remove(remote_output)
+        sftp.close()
+
+    # Close SSH Connections
+    chan.close()
+    ssh_transp.close()
+    ssh.close()
+
+    # Display SSH Session Standard Output
+    sys.stderr.write(errdata.decode('UTF-8'))
+    print(data.decode('UTF-8'))
+
+    # Return Return Code From SSH
+    sys.exit(retcode)
+
+
+if __name__ == "__main__":
+    main()
