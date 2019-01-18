@@ -28,7 +28,7 @@ def main():
     ssh = paramiko.SSHClient()
     ssh.set_missing_host_key_policy(AutoAddPolicy())
     ssh.load_system_host_keys()
-    ssh.connect(config['sshHost'], port=config['sshPort'], username=config['sshUser'])
+    ssh.connect(**config['connection'])
     ssh_transp = ssh.get_transport()
 
     # Open SSH session
@@ -45,8 +45,8 @@ def main():
         filename_output = peertube_output.split('/')[-1]
         filename_input = peertube_input.split('/')[-1]
 
-        remote_input = os.path.join(config['sshPath'], filename_input)
-        remote_output = os.path.join(config['sshPath'], filename_output)
+        remote_input = os.path.join(config['remote_path'], filename_input)
+        remote_output = os.path.join(config['remote_path'], filename_output)
 
         # Prepare remote filepath
         args[index_input] = remote_input
@@ -66,9 +66,9 @@ def main():
     while not chan.exit_status_ready():  # monitoring process
         # Reading from output streams
         while chan.recv_ready():
-            data += chan.recv(1000)
+            sys.stdout.write(chan.recv(1024).decode('UTF-8'))
         while chan.recv_stderr_ready():
-            errdata += chan.recv_stderr(1000)
+            sys.stderr.write(chan.recv_stderr(1024).decode('UTF-8'))
         time.sleep(sleeptime)
 
     # Get Return Code From SSH
@@ -88,10 +88,6 @@ def main():
     chan.close()
     ssh_transp.close()
     ssh.close()
-
-    # Display SSH Session Standard Output
-    sys.stderr.write(errdata.decode('UTF-8'))
-    print(data.decode('UTF-8'))
 
     # Return Return Code From SSH
     sys.exit(retcode)
